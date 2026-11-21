@@ -78,7 +78,7 @@ Cor de destaque, animações, FPS, brilho e "escurecer sozinho" ficam salvos na 
 
 ## Como funciona (resumo técnico)
 
-- **Sem tremulação:** um quadro inteiro de 320×240 em 16 bits ocupa 150 KB, e o ESP32 não tem um bloco de RAM livre desse tamanho. Por isso a cena é desenhada em **2 faixas de 120 linhas** num buffer de 75 KB. Cada faixa fica pronta na RAM e só então vai para a tela via SPI/DMA.
+- **Sem tremulação:** um quadro inteiro de 320×240 em 16 bits ocupa 150 KB, e o ESP32 não tem um bloco de RAM livre desse tamanho. Por isso a cena é desenhada em **4 faixas de 60 linhas**, usando **2 buffers de 37,5 KB que se alternam**: enquanto um é enviado à tela por DMA, o outro recebe o desenho da faixa seguinte. Antes de reutilizar um buffer, o código espera o DMA terminar (`waitDMA()`).
 - **Fontes:** as fontes que vêm na LovyanGFX só têm ASCII. As deste projeto são geradas da fonte [Inter](https://rsms.me/inter/) (licença OFL) com anti-aliasing, acentos e `°`. Para mudar tamanhos ou caracteres, edite e rode `tools/gen_fonts.py`.
 - **Animações independentes do FPS:** tudo usa interpolação exponencial baseada no tempo (`approach()`), então a velocidade das animações é a mesma a 15 ou a 40 FPS.
 - **Organização:** `ui.cpp` contém só a interface e não sabe em que hardware está rodando. O `.ino` implementa as funções de `platform.h` para o ESP32: touch, memória, brilho e calibração.

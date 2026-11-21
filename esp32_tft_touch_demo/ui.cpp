@@ -6,10 +6,11 @@
 //
 //  Como a tela é desenhada sem piscar:
 //  Um quadro inteiro (320x240x16 bits = 150 KB) não cabe num único bloco
-//  de RAM do ESP32. Então desenhamos o quadro em 2 FAIXAS de 120 linhas
-//  usando um único buffer de 75 KB: a cena é desenhada duas vezes, cada
-//  vez "recortada" (clip) para uma faixa, e a faixa pronta é enviada à
-//  tela. Como nada é desenhado direto no LCD, não há tremulação.
+//  de RAM do ESP32. Então desenhamos o quadro em 4 FAIXAS de 60 linhas,
+//  com 2 buffers de 37,5 KB que se alternam: enquanto um é enviado à tela
+//  por DMA, o outro recebe o desenho da faixa seguinte. A cena é desenhada
+//  uma vez por faixa, "recortada" (clip) para ela. Como nada é desenhado
+//  direto no LCD, não há tremulação.
 // =====================================================================
 #include "ui.h"
 #include "platform.h"
@@ -30,7 +31,7 @@ namespace {
 // ---------------------------------------------------------------------
 constexpr int W = 320;
 constexpr int H = 240;
-constexpr int BAND_H = 120;
+constexpr int BAND_H = 60;        // 4 faixas de 60 linhas
 constexpr int BAR_H = 28;          // altura da barra de status
 
 constexpr float PI_F = 3.14159265f;
@@ -57,8 +58,8 @@ constexpr int N_ACCENTS = sizeof(ACCENTS) / sizeof(ACCENTS[0]);
 // ---------------------------------------------------------------------
 lgfx::LovyanGFX* g_out = nullptr;
 LGFX_Sprite g_canvas;               // "tela virtual" 320x240 (só uma faixa existe na RAM)
-LGFX_Sprite g_view;                 // a faixa de 320x120 que é enviada ao LCD
-uint16_t*   g_buf = nullptr;
+LGFX_Sprite g_view[2];              // as faixas de 320x60 que são enviadas ao LCD
+uint16_t*   g_buf[2] = { nullptr, nullptr };   // 2 buffers alternados (ping-pong)
 int         g_bandY = 0;
 
 uint32_t g_now = 0, g_lastFrame = 0;
@@ -1353,14 +1354,20 @@ void render()
   g_out->startWrite();
   for (int band = 0; band < H / BAND_H; band++) {
     g_bandY = band * BAND_H;
+    int b = band & 1;
     // truque: o sprite "acha" que tem 240 linhas, mas o ponteiro é deslocado
     // para que a faixa atual caia exatamente dentro do buffer de 120 linhas.
     // O clip garante que nada é escrito fora da faixa.
-    G.setBuffer(g_buf - (size_t)g_bandY * W, W, H, 16);
+    G.setBuffer(g_buf[b] - (size_t)g_bandY * W, W, H, 16);
     unclip();
     drawScene();
-    g_view.pushSprite(g_out, 0, g_bandY);
+    // O envio é por DMA (em segundo plano). Enquanto esta faixa é enviada,
+    // a próxima é desenhada no OUTRO buffer. Antes de enviar, esperamos o
+    // envio anterior terminar; sem isso, a faixa de baixo "invadia" a de cima.
+    g_out->waitDMA();
+    g_view[b].pushSprite(g_out, 0, g_bandY);
   }
+  g_out->waitDMA();
   g_out->endWrite();
 }
 
@@ -1385,9 +1392,11 @@ bool loadFont(lgfx::VLWfont& f, lgfx::PointerWrapper& w, const uint8_t* data, si
 bool ui_begin(lgfx::LovyanGFX* out)
 {
   g_out = out;
-  g_buf = (uint16_t*)malloc((size_t)W * BAND_H * 2);
-  if (!g_buf) return false;
-  g_view.setBuffer(g_buf, W, BAND_H, 16);
+  for (int i = 0; i < 2; i++) {
+    g_buf[i] = (uint16_t*)malloc((size_t)W * BAND_H * 2);
+    if (!g_buf[i]) return false;
+    g_view[i].setBuffer(g_buf[i], W, BAND_H, 16);
+  }
 
   loadFont(F12, W12, inter_12_vlw, inter_12_vlw_len);
   loadFont(F14, W14, inter_14_vlw, inter_14_vlw_len);

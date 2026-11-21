@@ -6,6 +6,8 @@
 //  Placa: "ESP32 Dev Module"
 //
 //  Pinos: veja config.h
+//  IMPORTANTE: nesta montagem CS e DC usam os pinos TX/RX (GPIO 1 e 3),
+//  então o programa não usa Serial (o Monitor Serial fica em silêncio).
 //
 //  Na 1ª vez que ligar, a tela pede para tocar nos 4 cantos (calibração).
 //  O resultado fica salvo na flash. Para recalibrar: mantenha o dedo na
@@ -33,6 +35,11 @@ bool plat_get_touch(int16_t* x, int16_t* y)
 
 bool plat_has_backlight() { return TFT_BL >= 0; }
 void plat_set_brightness(uint8_t level) { if (TFT_BL >= 0) lcd.setBrightness(level); }
+uint8_t plat_load_setting(const char* key, uint8_t def) { return prefs.getUChar(key, def); }
+void plat_save_setting(const char* key, uint8_t value)
+{
+  if (prefs.getUChar(key, value + 1) != value) prefs.putUChar(key, value);   // evita gravar à toa
+}
 uint32_t plat_free_heap() { return ESP.getFreeHeap(); }
 uint32_t plat_min_free_heap() { return ESP.getMinFreeHeap(); }
 uint32_t plat_cpu_mhz() { return ESP.getCpuFreqMHz(); }
@@ -41,6 +48,7 @@ const char* plat_chip_name() { return ESP.getChipModel(); }
 void plat_calibrate_touch()
 {
   uint16_t cal[8];
+  lcd.setBrightness(200);
   lcd.fillScreen(TFT_BLACK);
   lcd.setTextDatum(textdatum_t::middle_center);
   lcd.setFont(&fonts::Font2);
@@ -56,8 +64,9 @@ void plat_calibrate_touch()
 // ----------------------------------------------------------------------------
 void setup()
 {
-  Serial.begin(115200);
+  // Sem Serial.begin(): TX/RX estão ligados nos pinos CS/DC da tela.
   lcd.init();
+  lcd.setBrightness(0);          // a interface acende o LED com um fade
   lcd.setRotation(SCREEN_ROTATION);
   lcd.fillScreen(TFT_BLACK);
 
@@ -70,12 +79,11 @@ void setup()
   else plat_calibrate_touch();
 
   if (!ui_begin(&lcd)) {
+    lcd.setBrightness(200);
     lcd.setTextColor(TFT_RED);
     lcd.drawString("Sem memoria para o buffer!", 10, 10);
-    Serial.println("ui_begin falhou: memoria insuficiente");
     while (true) delay(1000);
   }
-  Serial.printf("UI pronta. RAM livre: %u bytes\n", (unsigned)ESP.getFreeHeap());
 }
 
 void loop()

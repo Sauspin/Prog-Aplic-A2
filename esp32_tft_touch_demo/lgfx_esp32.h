@@ -59,7 +59,7 @@ public:
       auto cfg = _light.config();
       cfg.pin_bl      = TFT_BL;
       cfg.invert      = false;
-      cfg.freq        = 44100;
+      cfg.freq        = BL_PWM_FREQ;
       cfg.pwm_channel = 7;
       _light.config(cfg);
       _panel.setLight(&_light);

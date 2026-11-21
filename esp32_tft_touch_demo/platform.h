@@ -12,3 +12,5 @@ uint32_t    plat_free_heap();
 uint32_t    plat_min_free_heap();
 uint32_t    plat_cpu_mhz();
 const char* plat_chip_name();
+uint8_t     plat_load_setting(const char* key, uint8_t def);  // preferências salvas na flash
+void        plat_save_setting(const char* key, uint8_t value);

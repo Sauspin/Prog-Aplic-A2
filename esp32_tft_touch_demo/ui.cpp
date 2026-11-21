@@ -14,6 +14,7 @@
 #include "ui.h"
 #include "platform.h"
 #include "fonts_inter.h"
+#include "config.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -70,7 +71,18 @@ uint32_t g_fpsLastPush = 0;
 int   g_accent = 0;
 bool  g_anim = true;
 bool  g_showFps = false;
-float g_brightness = 200;
+
+// brilho do LED (pino TFT_BL com PWM)
+constexpr uint8_t  BRIGHT_MIN   = 8;       // nunca apaga de vez pelo slider
+constexpr uint8_t  DIM_LEVEL    = 10;      // nível do "escurecer sozinho"
+constexpr uint32_t DIM_AFTER_MS = 30000;   // tempo sem toque para escurecer
+int      g_bright = 191;          // brilho escolhido (0..255)
+float    g_brightOut = 0;         // brilho aplicado no LED (anima: o LED "esmaece")
+int      g_brightSent = -1;       // último valor enviado ao PWM
+bool     g_autoDim = false;
+bool     g_dimmed = false;
+uint32_t g_lastTouchMs = 0;
+bool     g_swallow = false;       // toque que só "acorda" a tela não clica em nada
 
 // transição entre telas
 float g_fade = 1.0f;
@@ -319,7 +331,7 @@ int32_t secondsOfDay()
 // ---------------------------------------------------------------------
 //  Telas
 // ---------------------------------------------------------------------
-enum Screen { SCR_HOME, SCR_DASH, SCR_CHART, SCR_CLOCK, SCR_GAUGE, SCR_SETTINGS, SCR_SYSTEM };
+enum Screen { SCR_HOME, SCR_DASH, SCR_CHART, SCR_CLOCK, SCR_GAUGE, SCR_SETTINGS, SCR_SYSTEM, SCR_BRIGHT, SCR_PINS };
 Screen g_screen = SCR_HOME;
 
 const char* screenTitle(Screen s)
@@ -331,6 +343,8 @@ const char* screenTitle(Screen s)
     case SCR_GAUGE:    return "Medidores";
     case SCR_SETTINGS: return "Ajustes";
     case SCR_SYSTEM:   return "Sistema";
+    case SCR_BRIGHT:   return "Brilho do LED";
+    case SCR_PINS:     return "Pinagem";
     default:           return "Painel ESP32";
   }
 }
@@ -396,6 +410,21 @@ void drawIcon(int id, int cx, int cy, uint32_t c, uint32_t bg)
       G.fillSmoothRoundRect(cx - 3, cy - 3, 6, 6, 1, C(c));
       break;
     }
+    case 6: { // sol (brilho)
+      for (int i = 0; i < 8; i++) {
+        float a = i * PI_F / 4;
+        line(cx + cosf(a) * 9, cy + sinf(a) * 9, cx + cosf(a) * 13, cy + sinf(a) * 13, 1.3f, c);
+      }
+      G.fillSmoothCircle(cx, cy, 6, C(c));
+      break;
+    }
+    case 7: { // conector (pinagem)
+      for (int i = 0; i < 4; i++) line(cx - 7.5f + i * 5, cy - 12, cx - 7.5f + i * 5, cy - 4, 1.0f, c);
+      G.fillSmoothRoundRect(cx - 12, cy - 5, 24, 11, 3, C(c));
+      for (int i = 0; i < 4; i++) G.fillRect(cx - 9 + i * 5, cy - 1, 3, 3, C(bg));
+      line(cx, cy + 6, cx, cy + 12, 1.3f, c);
+      break;
+    }
   }
 }
 
@@ -444,20 +473,23 @@ void drawStatusBar()
 //  TELA: INÍCIO
 // =====================================================================
 struct Tile { const char* label; const char* sub; int icon; uint32_t color; Screen target; };
-const Tile TILES[6] = {
-  { "Dashboard", "4 sensores",  0, 0x22D3EE, SCR_DASH     },
-  { "Gráficos",  "auto-escala", 1, 0xA78BFA, SCR_CHART    },
+const Tile TILES[] = {
+  { "Sensores",  "dashboard",   0, 0x22D3EE, SCR_DASH     },
+  { "Gráficos",  "escala auto", 1, 0xA78BFA, SCR_CHART    },
   { "Relógio",   "analógico",   2, 0x34D399, SCR_CLOCK    },
-  { "Medidores", "interativo",  3, 0xFBBF24, SCR_GAUGE    },
-  { "Ajustes",   "tema e touch",4, 0xF472B6, SCR_SETTINGS },
-  { "Sistema",   "memória/FPS", 5, 0x60A5FA, SCR_SYSTEM   },
+  { "Medidor",   "gauges",      3, 0xFB923C, SCR_GAUGE    },
+  { "Brilho",    "LED PWM",     6, 0xFDE047, SCR_BRIGHT   },
+  { "Ajustes",   "tema",        4, 0xF472B6, SCR_SETTINGS },
+  { "Sistema",   "memória",     5, 0x60A5FA, SCR_SYSTEM   },
+  { "Pinagem",   "fiação",      7, 0x2DD4BF, SCR_PINS     },
 };
-constexpr int TILE_W = 96, TILE_H = 98, ID_TILE0 = 10;
+constexpr int N_TILES = sizeof(TILES) / sizeof(TILES[0]);
+constexpr int TILE_W = 72, TILE_H = 98, ID_TILE0 = 10;
 
 struct Ripple { int tile = -1; int x, y; uint32_t t0; } g_ripple;
 
-inline int tileX(int i) { return 8 + (i % 3) * (TILE_W + 8); }
-inline int tileY(int i) { return BAR_H + 6 + (i / 3) * (TILE_H + 6); }
+inline int tileX(int i) { return 7 + (i % 4) * (TILE_W + 6); }
+inline int tileY(int i) { return BAR_H + 6 + (i / 4) * (TILE_H + 6); }
 
 void updateHome()
 {
@@ -470,7 +502,7 @@ void updateHome()
     }
     return;
   }
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < N_TILES; i++) {
     if (button(ID_TILE0 + i, tileX(i), tileY(i), TILE_W, TILE_H)) {
       g_ripple.tile = i; g_ripple.x = T.x; g_ripple.y = T.y; g_ripple.t0 = g_now;
     }
@@ -479,7 +511,7 @@ void updateHome()
 
 void drawHome()
 {
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < N_TILES; i++) {
     const Tile& t = TILES[i];
     int x = tileX(i), y = tileY(i);
     if (!inBand(y, TILE_H)) continue;
@@ -497,12 +529,13 @@ void drawHome()
       }
     }
 
-    int cx = x + TILE_W / 2, cy = y + 36;
+    int cx = x + TILE_W / 2, cy = y + 35;
     float glow = 0.16f + 0.10f * p;
-    circle(cx, cy, 22, mix(bg, t.color, glow));
+    circle(cx, cy, 21, mix(bg, t.color, glow));
     drawIcon(t.icon, cx, cy, t.color, mix(bg, t.color, glow));
-    text(t.label, cx, y + 71, &F14, COL_TEXT, textdatum_t::middle_center);
-    text(t.sub, cx, y + 87, &F12, COL_MUTED, textdatum_t::middle_center);
+    const lgfx::IFont* lf = textW(t.label, &F14) > TILE_W - 6 ? &F12 : &F14;
+    text(t.label, cx, y + 70, lf, COL_TEXT, textdatum_t::middle_center);
+    text(t.sub, cx, y + 86, &F12, COL_MUTED, textdatum_t::middle_center);
   }
 }
 
@@ -995,14 +1028,13 @@ inline int swatchX(int i) { return SW_X0 + 12 + i * 27; }
 void updateSettings()
 {
   for (int i = 0; i < N_ACCENTS; i++)
-    if (button(ID_SWATCH0 + i, swatchX(i) - 12, 44, 24, 24)) g_accent = i;
-  if (button(ID_TOG_ANIM, 250, 82, 56, 30)) g_anim = !g_anim;
-  if (button(ID_TOG_FPS,  250, 116, 56, 30)) g_showFps = !g_showFps;
+    if (button(ID_SWATCH0 + i, swatchX(i) - 12, 44, 24, 24)) { g_accent = i; plat_save_setting("accent", i); }
+  if (button(ID_TOG_ANIM, 250, 82, 56, 30)) { g_anim = !g_anim; plat_save_setting("anim", g_anim); }
+  if (button(ID_TOG_FPS,  250, 116, 56, 30)) { g_showFps = !g_showFps; plat_save_setting("fps", g_showFps); }
   if (T.pressed && inRect(T.x, T.y, 110, 150, 190, 26, 4)) g_active = ID_BRIGHT;
-  if (g_active == ID_BRIGHT && T.down) {
-    g_brightness = clampf((T.x - 120) / 176.0f, 0.05f, 1) * 255;
-    plat_set_brightness((uint8_t)g_brightness);
-  }
+  if (g_active == ID_BRIGHT && T.down)
+    g_bright = (int)(clampf((T.x - 120) / 176.0f, BRIGHT_MIN / 255.0f, 1) * 255);
+  if (g_active == ID_BRIGHT && T.released) plat_save_setting("bright", (uint8_t)g_bright);
   if (button(ID_CALIB, 16, 188, 288, 38)) g_calibRequest = true;
   approach(g_togAnim, g_anim ? 1 : 0, 14);
   approach(g_togFps, g_showFps ? 1 : 0, 14);
@@ -1040,7 +1072,7 @@ void drawSettings()
   // brilho
   text("Brilho", 20, 164, &F14, plat_has_backlight() ? COL_TEXT : COL_DIM);
   if (!plat_has_backlight()) text("(LED no 3V3)", 20, 179, &F12, COL_DIM);
-  float t = g_brightness / 255.0f;
+  float t = g_bright / 255.0f;
   rrect(120, 161, 176, 6, 3, COL_CARD2);
   rrect(120, 161, (int)(6 + 170 * t), 6, 3, accent());
   int kx = 120 + (int)(176 * t);
@@ -1110,6 +1142,192 @@ void drawSystem()
   }
 }
 
+// =====================================================================
+//  TELA: BRILHO DO LED  (PWM no pino TFT_BL)
+// =====================================================================
+constexpr int ID_BPILL = 70, ID_PRESET0 = 71, ID_TOG_DIM = 75;
+constexpr int BP_X = 22, BP_Y = BAR_H + 12, BP_W = 78, BP_H = H - BAR_H - 24;
+constexpr int PRESETS[4] = { 10, 25, 50, 100 };
+constexpr uint32_t COL_SUN = 0xFDE047;
+int   g_dragStartBright = 0;
+float g_togDim = 0;
+
+inline int presetX(int i) { return 116 + i * 50; }
+
+void setBright(int v) { g_bright = v < BRIGHT_MIN ? BRIGHT_MIN : (v > 255 ? 255 : v); }
+
+void updateBright()
+{
+  // slider vertical grande: arrasta em qualquer ponto (movimento relativo)
+  if (T.pressed && inRect(T.x, T.y, BP_X, BP_Y, BP_W, BP_H)) { g_active = ID_BPILL; g_dragStartBright = g_bright; }
+  if (g_active == ID_BPILL && T.down)
+    setBright(g_dragStartBright + (int)((T.sy - T.y) * 255.0f / (BP_H - 20)));
+  if (g_active == ID_BPILL && T.released) {
+    // um toque rápido (sem arrastar) define o brilho pela altura do toque
+    if (abs(T.y - T.sy) < 4) setBright((int)((BP_Y + BP_H - T.y) * 255.0f / BP_H));
+    plat_save_setting("bright", (uint8_t)g_bright);
+  }
+  for (int i = 0; i < 4; i++)
+    if (button(ID_PRESET0 + i, presetX(i), 150, 46, 28)) {
+      setBright(PRESETS[i] * 255 / 100);
+      plat_save_setting("bright", (uint8_t)g_bright);
+    }
+  if (button(ID_TOG_DIM, 116, 188, 196, 36)) { g_autoDim = !g_autoDim; plat_save_setting("autodim", g_autoDim); }
+  approach(g_togDim, g_autoDim ? 1 : 0, 14);
+}
+
+void drawBright()
+{
+  char buf[32];
+  float t = g_bright / 255.0f;          // valor escolhido
+  float o = g_brightOut / 255.0f;       // valor que o LED está mostrando agora
+  float p = g_press[ID_BPILL];
+
+  // ---- slider "pílula" vertical ----
+  card(BP_X, BP_Y, BP_W, BP_H, 24, COL_CARD2, mix(COL_LINE, COL_SUN, 0.5f * p));
+  int fh = (int)(BP_H * t);
+  uint32_t fill = mix(0x6B5310, COL_SUN, 0.35f + 0.65f * t);
+  if (fh > 0 && clip(BP_X, BP_Y + BP_H - fh, BP_W, fh)) {
+    G.fillSmoothRoundRect(BP_X + 1, BP_Y + 1, BP_W - 2, BP_H - 2, 23, C(fill));
+    unclip();
+  }
+  // sol: os raios crescem com o brilho
+  int sx = BP_X + BP_W / 2, sy = BP_Y + BP_H - 34;
+  uint32_t ic = fh > 56 ? 0x2A2205 : COL_TEXT;
+  if (inBand(sy - 20, 40)) {
+    float rl = 4 + 6 * t;
+    for (int i = 0; i < 8; i++) {
+      float a = i * PI_F / 4 + g_now * 0.0004f * t;
+      line(sx + cosf(a) * 10, sy + sinf(a) * 10, sx + cosf(a) * (10 + rl), sy + sinf(a) * (10 + rl), 1.4f, ic);
+    }
+    G.fillSmoothCircle(sx, sy, 7, C(ic));
+  }
+  // marcas de 25% em 25%
+  for (int k = 1; k < 4; k++) {
+    int y = BP_Y + BP_H - BP_H * k / 4;
+    G.drawFastHLine(BP_X + 8, y, 6, C(mix(COL_DIM, COL_BG, (BP_Y + BP_H - y) < fh ? 0.6f : 0)));
+  }
+
+  // ---- lado direito ----
+  int pct = (int)lroundf(t * 100);
+  snprintf(buf, sizeof(buf), "%d%%", pct);
+  int tw = text(buf, 116, BAR_H + 26, &F30, COL_TEXT);
+  snprintf(buf, sizeof(buf), "duty %d/255", (int)lroundf(g_brightOut));
+  text(buf, 122 + tw, BAR_H + 22, &F12, COL_MUTED);
+  if (g_dimmed) text("escurecido", 122 + tw, BAR_H + 37, &F12, COL_WARN);
+  else {
+    snprintf(buf, sizeof(buf), "GPIO %d", TFT_BL);
+    text(buf, 122 + tw, BAR_H + 37, &F12, COL_DIM);
+  }
+
+  // forma de onda do PWM (mostra o "duty cycle" que o LED está recebendo)
+  int wx = 116, wy = BAR_H + 52, ww = 196, wh = 56;
+  card(wx, wy, ww, wh, 10, COL_CARD);
+  if (!plat_has_backlight()) {
+    text("LED ligado no 3V3", wx + ww / 2, wy + 20, &F12, COL_WARN, textdatum_t::middle_center);
+    text("defina TFT_BL no config.h", wx + ww / 2, wy + 36, &F12, COL_DIM, textdatum_t::middle_center);
+  } else if (inBand(wy, wh)) {
+    int x0 = wx + 10, x1 = wx + ww - 10, hi = wy + 12, lo = wy + wh - 14;
+    int periods = 5;
+    float per = (float)(x1 - x0) / periods;
+    uint32_t wc = mix(COL_DIM, COL_SUN, 0.4f + 0.6f * o);
+    float shift = fmodf(g_now * 0.02f, per);
+    if (clip(x0, wy + 4, x1 - x0, wh - 8)) {
+      for (int k = -1; k <= periods; k++) {
+        float a = x0 + k * per + shift, b = a + per * o, e = a + per;
+        if (o > 0.005f) {
+          G.fillRect((int)a, hi, (int)(b - a) + 1, lo - hi, C(mix(COL_CARD, COL_SUN, 0.12f)));
+          line(a, hi, b, hi, 0.8f, wc);
+          line(a, lo, a, hi, 0.8f, wc);
+          line(b, hi, b, lo, 0.8f, wc);
+        }
+        line(b, lo, e, lo, 0.8f, wc);
+      }
+      unclip();
+    }
+    snprintf(buf, sizeof(buf), "PWM %.0f kHz", BL_PWM_FREQ / 1000.0f);
+    text(buf, x1, wy + wh - 6, &F12, COL_DIM, textdatum_t::middle_right);
+  }
+
+  // atalhos
+  for (int i = 0; i < 4; i++) {
+    int x = presetX(i), y = 150;
+    if (!inBand(y, 28)) break;
+    bool sel = abs(pct - PRESETS[i]) <= 1;
+    float pp = g_press[ID_PRESET0 + i];
+    uint32_t f = sel ? mix(COL_BG, COL_SUN, 0.22f) : mix(COL_CARD2, COL_SUN, 0.25f * pp);
+    card(x, y, 46, 28, 14, f, sel ? mix(COL_BG, COL_SUN, 0.7f) : COL_LINE);
+    snprintf(buf, sizeof(buf), "%d%%", PRESETS[i]);
+    text(buf, x + 23, y + 14, &F12, sel ? COL_WHITE : COL_MUTED, textdatum_t::middle_center);
+  }
+
+  // escurecer sozinho
+  card(116, 188, 196, 40, 10, mix(COL_CARD, accent(), 0.08f * g_press[ID_TOG_DIM]));
+  text("Escurecer sozinho", 126, 201, &F14, COL_TEXT);
+  text("após 30 s sem toque", 126, 216, &F12, COL_DIM);
+  toggle(258, 196, g_togDim, g_press[ID_TOG_DIM]);
+}
+
+// =====================================================================
+//  TELA: PINAGEM  (a ligação configurada em config.h)
+// =====================================================================
+void pinName(char* b, size_t n, int pin)
+{
+  if (pin < 0) snprintf(b, n, "—");
+  else if (pin == 1) snprintf(b, n, "TX · 1");
+  else if (pin == 3) snprintf(b, n, "RX · 3");
+  else snprintf(b, n, "GPIO %d", pin);
+}
+
+uint32_t pinColor(int pin)
+{
+  // a mesma cor para o mesmo GPIO: assim dá para ver os fios compartilhados
+  switch (pin) {
+    case PIN_SCLK: return 0x22D3EE;
+    case PIN_MOSI: return 0xA78BFA;
+    case PIN_MISO: return 0xF472B6;
+    default:       return COL_MUTED;
+  }
+}
+
+void pinRow(int x, int y, const char* name, int pin, bool live = false)
+{
+  if (!inBand(y - 11, 22)) return;
+  char b[16];
+  pinName(b, sizeof(b), pin);
+  text(name, x, y, &F14, COL_TEXT);
+  uint32_t c = pinColor(pin);
+  bool shared = c != COL_MUTED;
+  int w = textW(b, &F12) + 16;
+  int cx = x + 136 - w;
+  uint32_t f = live ? mix(COL_CARD, COL_GOOD, 0.45f) : (shared ? mix(COL_CARD, c, 0.20f) : COL_CARD2);
+  card(cx, y - 10, w, 20, 10, f, live ? COL_GOOD : (shared ? mix(COL_CARD, c, 0.6f) : COL_LINE));
+  text(b, cx + w / 2, y, &F12, shared || live ? COL_WHITE : COL_TEXT, textdatum_t::middle_center);
+}
+
+void drawPins()
+{
+  card(8, BAR_H + 6, 304, H - BAR_H - 12, 12, COL_CARD);
+  int lx = 18, rx = 166, y0 = BAR_H + 22, dy = 24;
+  text("TELA", lx, y0, &F12, COL_MUTED);
+  text("TOUCH", rx, y0, &F12, COL_MUTED);
+  pinRow(lx, y0 + dy * 1, "CS",    TFT_CS);
+  pinRow(lx, y0 + dy * 2, "RESET", TFT_RST);
+  pinRow(lx, y0 + dy * 3, "DC",    TFT_DC);
+  pinRow(lx, y0 + dy * 4, "MOSI",  PIN_MOSI);
+  pinRow(lx, y0 + dy * 5, "SCK",   PIN_SCLK);
+  pinRow(lx, y0 + dy * 6, "MISO",  PIN_MISO);
+  pinRow(lx, y0 + dy * 7, "LED",   TFT_BL);
+  pinRow(rx, y0 + dy * 1, "T_CLK", PIN_SCLK);
+  pinRow(rx, y0 + dy * 2, "T_CS",  TOUCH_CS);
+  pinRow(rx, y0 + dy * 3, "T_DIN", PIN_MOSI);
+  pinRow(rx, y0 + dy * 4, "T_DO",  PIN_MISO);
+  pinRow(rx, y0 + dy * 5, "T_IRQ", TOUCH_IRQ, T.down);   // acende enquanto há toque
+  G.drawFastVLine(160, y0 + 10, dy * 7, C(COL_LINE));
+  text("Mesma cor = mesmo fio", rx, y0 + dy * 6 + 2, &F12, COL_DIM);
+  text("VCC 3V3 · GND GND", rx, y0 + dy * 7, &F12, COL_DIM);
+}
+
 // ---------------------------------------------------------------------
 //  Desenho do quadro inteiro (chamado uma vez por faixa)
 // ---------------------------------------------------------------------
@@ -1125,6 +1343,8 @@ void drawScene()
     case SCR_GAUGE:    drawGauge(); break;
     case SCR_SETTINGS: drawSettings(); break;
     case SCR_SYSTEM:   drawSystem(); break;
+    case SCR_BRIGHT:   drawBright(); break;
+    case SCR_PINS:     drawPins(); break;
   }
 }
 
@@ -1181,7 +1401,15 @@ bool ui_begin(lgfx::LovyanGFX* out)
   initSeries();
   g_lastSample = g_now;
   for (auto& g : GA) g.value = 0;
-  plat_set_brightness((uint8_t)g_brightness);
+  // preferências salvas
+  g_accent    = plat_load_setting("accent", 0) % N_ACCENTS;
+  g_anim      = plat_load_setting("anim", 1) != 0;
+  g_showFps   = plat_load_setting("fps", 0) != 0;
+  g_autoDim   = plat_load_setting("autodim", 0) != 0;
+  setBright(plat_load_setting("bright", 191));
+  g_togAnim = g_anim; g_togFps = g_showFps; g_togDim = g_autoDim;
+  g_brightOut = 0;            // o LED acende suavemente ao ligar
+  g_lastTouchMs = g_now;
   g_fade = 0;
   return true;
 }
@@ -1201,6 +1429,16 @@ void ui_loop()
 
   readTouch();
 
+  // escurecer sozinho: o 1º toque com a tela escura só acende (não clica)
+  if (T.down) g_lastTouchMs = now;
+  if (g_dimmed && T.pressed) { g_dimmed = false; g_swallow = true; }
+  if (g_swallow) {
+    T.pressed = false;
+    if (T.released) { T.released = false; g_swallow = false; }
+  }
+  if (g_autoDim && !g_dimmed && !T.down && now - g_lastTouchMs > DIM_AFTER_MS) g_dimmed = true;
+  if (!g_autoDim) g_dimmed = false;
+
   while (now - g_lastSample >= SAMPLE_MS) { g_lastSample += SAMPLE_MS; sampleSeries(); }
   g_sampleFrac = g_anim ? clampf((now - g_lastSample) / (float)SAMPLE_MS, 0, 1) : 0;
   for (auto& s : S) approach(s.shown, s.v, 6);
@@ -1213,13 +1451,21 @@ void ui_loop()
     case SCR_CLOCK:    updateClock(); break;
     case SCR_GAUGE:    updateGauge(); break;
     case SCR_SETTINGS: updateSettings(); break;
-    case SCR_SYSTEM:   break;
+    case SCR_BRIGHT:   updateBright(); break;
+    case SCR_SYSTEM:
+    case SCR_PINS:     break;
   }
   // a tela de gráficos precisa da escala mesmo quando volta do dashboard
   if (g_screen != SCR_CHART) g_axInit = false;
 
   for (int i = 0; i < N_IDS; i++) approach(g_press[i], (g_active == i && T.down) ? 1.0f : 0.0f, 16);
   approach(g_fade, 1, 9);
+
+  // brilho do LED com transição suave (o próprio LED esmaece)
+  float target = g_dimmed ? fminf((float)g_bright, (float)DIM_LEVEL) : (float)g_bright;
+  { bool a = g_anim; g_anim = true; approach(g_brightOut, target, g_dimmed ? 2.5f : 7); g_anim = a; }
+  int bo = (int)lroundf(g_brightOut);
+  if (bo != g_brightSent) { g_brightSent = bo; plat_set_brightness((uint8_t)bo); }
 
   render();
 
@@ -1228,6 +1474,7 @@ void ui_loop()
   if (g_calibRequest) {
     g_calibRequest = false;
     plat_calibrate_touch();
+    g_brightSent = -1;          // a calibração mexe no brilho: reenviar
     g_active = -1;
     T = TouchState();
   }

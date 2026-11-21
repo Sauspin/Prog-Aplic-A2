@@ -19,8 +19,13 @@ bool plat_get_touch(int16_t* x, int16_t* y)
   return false;
 }
 void plat_calibrate_touch() { std::puts("(simulador) calibração não é necessária"); }
-bool plat_has_backlight() { return false; }
-void plat_set_brightness(uint8_t) {}
+#include <map>
+#include <string>
+static std::map<std::string, uint8_t> g_settings;   // no PC as preferências ficam só na memória
+uint8_t plat_load_setting(const char* key, uint8_t def) { auto it = g_settings.find(key); return it == g_settings.end() ? def : it->second; }
+void plat_save_setting(const char* key, uint8_t v) { g_settings[key] = v; }
+bool plat_has_backlight() { return true; }
+void plat_set_brightness(uint8_t v) { lcd.setBrightness(v); }
 uint32_t plat_free_heap() { return 180 * 1024; }
 uint32_t plat_min_free_heap() { return 150 * 1024; }
 uint32_t plat_cpu_mhz() { return 240; }

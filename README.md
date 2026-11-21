@@ -18,17 +18,20 @@ Tem tema escuro, fontes suavizadas com acentos, ícones vetoriais, botões com e
 
 ## Ligação (pinos)
 
-Esta é a ligação padrão usada no código. **Confira com os seus fios**: pelas fotos não dá para ter certeza de cada um. Se algum for diferente, troque o número em [`config.h`](esp32_tft_touch_demo/config.h).
+Esta é a ligação desta montagem, já configurada em [`config.h`](esp32_tft_touch_demo/config.h). A tela e o touch dividem o mesmo barramento SPI.
 
 | Tela | ESP32 | | Tela | ESP32 |
 |---|---|---|---|---|
 | VCC | 3V3 (ou 5V) | | SDO(MISO) | GPIO 19 |
-| GND | GND | | LED | 3V3 |
-| CS | GPIO 15 | | T_CLK | GPIO 18 (mesmo fio do SCK) |
-| RESET | GPIO 4 | | T_CS | GPIO 21 |
-| DC | GPIO 2 | | T_DIN | GPIO 23 (mesmo fio do MOSI) |
-| SDI(MOSI) | GPIO 23 | | T_DO | GPIO 19 (mesmo fio do MISO) |
-| SCK | GPIO 18 | | T_IRQ | não ligado |
+| GND | GND | | T_CLK | GPIO 18 (mesmo fio do SCK) |
+| CS | **TX** (GPIO 1) | | T_CS | GPIO 21 |
+| RESET | GPIO 5 | | T_DIN | GPIO 23 (mesmo fio do MOSI) |
+| DC | **RX** (GPIO 3) | | T_DO | GPIO 19 (mesmo fio do MISO) |
+| SDI(MOSI) | GPIO 23 | | T_IRQ | GPIO 22 |
+| SCK | GPIO 18 | | LED | GPIO 4 (brilho por PWM) |
+
+> **TX/RX:** CS e DC estão nos pinos da USB-serial. Por isso o programa **não usa `Serial`** e o Monitor Serial fica sem mensagens.
+> Se a gravação falhar com a tela ligada, desconecte os fios de CS e DC, grave e reconecte.
 
 ## Como gravar
 
@@ -49,13 +52,17 @@ Para calibrar de novo, use **Ajustes → Calibrar touch** ou mantenha o dedo na 
 
 | Tela | Destaques |
 |---|---|
-| **Início** | 6 blocos com ícones vetoriais. Ao tocar, o bloco acende e uma "onda" (ripple) se espalha a partir do dedo |
-| **Dashboard** | 4 sensores simulados com valor animado, seta de tendência e mini-gráfico com degradê. Toque num cartão para abrir o gráfico dele |
+| **Início** | 8 blocos com ícones vetoriais. Ao tocar, o bloco acende e uma "onda" (ripple) se espalha a partir do dedo |
+| **Sensores** (dashboard) | 4 sensores simulados com valor animado, seta de tendência e mini-gráfico com degradê. Toque num cartão para abrir o gráfico dele |
 | **Gráficos** | Linha ou barras, com rolagem suave e **auto-escala animada** (a CPU tem picos de propósito, para a escala mudar). Arraste o dedo sobre o gráfico para ver o valor de cada ponto |
 | **Relógio** | Analógico com ponteiro de segundos suave. Toque nele para mudar para o digital. Botões para ajustar hora e minuto |
-| **Medidores** | Dois gauges com ponteiro "elástico" (efeito mola), controlados por sliders |
+| **Medidor** | Dois gauges com ponteiro "elástico" (efeito mola), controlados por sliders |
+| **Brilho** | Controle do LED (GPIO 4, PWM): slider vertical grande, atalhos 10/25/50/100%, desenho da onda PWM com o duty cycle real e opção de escurecer após 30 s sem toque. O LED muda de brilho com fade suave |
 | **Ajustes** | Cor de destaque (6 temas), liga/desliga animações, contador de FPS, brilho, calibração |
 | **Sistema** | Chip, CPU, RAM livre, tempo ligado, gráfico de FPS e teste de precisão do toque |
+| **Pinagem** | Mostra a ligação configurada. Fios compartilhados aparecem com a mesma cor, e o T_IRQ acende enquanto você toca |
+
+Cor de destaque, animações, FPS, brilho e "escurecer sozinho" ficam salvos na flash e voltam quando a placa é religada.
 
 ## Problemas comuns
 

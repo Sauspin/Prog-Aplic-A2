@@ -6,27 +6,29 @@
 //         controlador ILI9341 + touch resistivo XPT2046 + slot SD
 //  MCU  : ESP32 DevKit 38 pinos (ESP-WROOM-32)
 //
-//  Ligação usada por padrão (a mais comum para ESP32 + ILI9341).
-//  A tela e o touch compartilham o MESMO barramento SPI (VSPI):
+//  Ligação desta montagem. A tela e o touch compartilham o MESMO
+//  barramento SPI (VSPI): SCK/MOSI/MISO são os mesmos fios.
 //
 //   Pino da tela      ->  ESP32
 //   -------------------------------
-//   VCC               ->  3V3   (ou 5V: a placa tem regulador)
+//   VCC               ->  3V3 (ou 5V: a placa tem regulador)
 //   GND               ->  GND
-//   CS                ->  GPIO 15
-//   RESET             ->  GPIO 4
-//   DC                ->  GPIO 2
+//   CS                ->  TX  (GPIO 1)
+//   RESET             ->  GPIO 5
+//   DC                ->  RX  (GPIO 3)
 //   SDI(MOSI)         ->  GPIO 23
 //   SCK               ->  GPIO 18
-//   LED               ->  3V3   (ou um GPIO, veja TFT_BL)
+//   LED               ->  GPIO 4   (brilho por PWM)
 //   SDO(MISO)         ->  GPIO 19
 //   T_CLK             ->  GPIO 18  (mesmo fio do SCK)
 //   T_CS              ->  GPIO 21
 //   T_DIN             ->  GPIO 23  (mesmo fio do MOSI)
 //   T_DO              ->  GPIO 19  (mesmo fio do MISO)
-//   T_IRQ             ->  não ligado (opcional)
+//   T_IRQ             ->  GPIO 22
 //
-//  Se a sua fiação for diferente, é só trocar os números abaixo.
+//  ATENÇÃO: CS e DC estão nos pinos TX/RX, que são os mesmos da USB-serial.
+//  Por isso o programa NÃO usa Serial (o Monitor Serial fica sem mensagens).
+//  Se o upload falhar, desconecte os fios CS e DC, grave e reconecte.
 // =====================================================================
 
 // ---- Barramento SPI (compartilhado tela + touch) ----
@@ -35,14 +37,15 @@
 #define PIN_MISO      19
 
 // ---- Tela ----
-#define TFT_CS        15
-#define TFT_DC        2
-#define TFT_RST       4      // -1 se o RESET estiver ligado no EN/3V3
-#define TFT_BL        -1     // GPIO do pino LED p/ controlar brilho (PWM). -1 = LED ligado direto no 3V3
+#define TFT_CS        1      // TX
+#define TFT_DC        3      // RX
+#define TFT_RST       5      // -1 se o RESET estiver ligado no EN/3V3
+#define TFT_BL        4      // pino LED (brilho por PWM). -1 = LED ligado direto no 3V3
+#define BL_PWM_FREQ   44100  // frequência do PWM do brilho (Hz)
 
 // ---- Touch XPT2046 ----
 #define TOUCH_CS      21
-#define TOUCH_IRQ     -1     // GPIO do T_IRQ, ou -1 se não estiver ligado
+#define TOUCH_IRQ     22     // GPIO do T_IRQ, ou -1 se não estiver ligado
 
 // ---- Controlador ----
 // A grande maioria dessas placas vermelhas usa ILI9341. Se a imagem
